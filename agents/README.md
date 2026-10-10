@@ -8,13 +8,18 @@ A FastAPI service that orchestrates a four-node LangGraph joke writer:
 ```text
 agents/
 ├── src/agent_service/
-│   ├── api.py       # FastAPI application and routes
-│   ├── config.py    # Environment-backed settings
-│   ├── graph.py     # LangGraph state and agent nodes
-│   ├── api.py       # FastAPI application and entry point
-│   └── schemas.py   # Request and response models
+│   ├── api.py                  # FastAPI application and routes
+│   ├── config.py               # Central environment-backed settings
+│   ├── graph.py                # Backward-compatible joke workflow facade
+│   ├── llm/
+│   │   └── factory.py          # Shared OpenAI/Anthropic/Groq model factory
+│   ├── orchestrations/
+│   │   ├── __init__.py         # Workflow registry and shared model injection
+│   │   └── joke.py             # Joke-writing LangGraph workflow
+│   └── schemas.py              # Request and response models
 ├── tests/
-│   └── test_graph.py
+│   ├── test_api.py
+│   └── test_orchestrations.py
 ├── .env.example
 ├── pyproject.toml
 └── requirements.txt
@@ -30,7 +35,9 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Set `OPENAI_API_KEY` in `.env` to use the OpenAI-backed joke writer. Without a key, the service uses a deterministic local workflow so development works without external services.
+Set `LLM_PROVIDER` to `openai`, `anthropic`, or `groq`, then add the matching API key and model in `.env`. For example, `openai` uses `OPENAI_API_KEY` and `OPENAI_MODEL` (GPT); `anthropic` uses `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` (Claude). Without the selected provider's key, the service uses a deterministic local workflow so development works without external services.
+
+All workflows are registered in `agent_service.orchestrations` and receive the same model instance created by `agent_service.llm.factory` from the shared settings. To add another workflow, place its graph builder in `orchestrations/` and register it in `build_orchestrations`, passing it the existing `model` rather than creating a provider client in the workflow.
 
 ## Run
 
@@ -58,21 +65,23 @@ With the server running, call the endpoint from Python:
 python scripts/call_api.py space travel
 ```
 
-The equivalent HTTP request is:
+The existing endpoint defaults to the `joke` agent. Get registered agent IDs from `GET /v1/agents`, then select one in the request body:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/invoke \
+  -H 'content-type: application/json' \
+  -d '{"agent_id":"joke","message":"space travel"}'
+```
+
+Or select an agent in the URL:
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/agents/joke/invoke \
   -H 'content-type: application/json' \
   -d '{"message":"space travel"}'
 ```
 
-Then call it:
-
-```bash
-curl -X POST http://127.0.0.1:8000/v1/invoke \
-  -H 'content-type: application/json' \
-  -d '{"message":"programming"}'
-```
+Add workflows to `ORCHESTRATION_BUILDERS` in `agent_service.orchestrations`. Each builder receives the shared configured model and should return a handler with the `message: str -> response: str` interface. Both invoke routes dispatch to that registered handler; unknown agent IDs return HTTP 404.
 
 Interactive API documentation is available at `http://127.0.0.1:8000/docs`.
 
